@@ -1,13 +1,13 @@
-use std::{fs::OpenOptions, path::PathBuf, str::FromStr};
+use std::{fs::OpenOptions, path::PathBuf, process, str::FromStr};
 
 use anyhow::Context;
 use clap::{Parser, ValueHint};
 use env_logger::Target;
 use log::{debug, error, info};
 use strum::VariantArray;
-use tao::event_loop::EventLoopBuilder;
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItemBuilder},
+    menu::{Menu, MenuEvent, MenuEventReceiver, MenuItemBuilder},
     TrayIcon, TrayIconBuilder,
 };
 
@@ -73,68 +73,39 @@ fn build_tray(tooltip: impl AsRef<str>) -> anyhow::Result<TrayIcon> {
         .context("Failed to build tray icon")
 }
 
-fn run_event_loop(args: CliArgs) -> anyhow::Result<()> {
-    // TODO: show notification that the app is running
-    let event_loop = EventLoopBuilder::new().build();
+/// Handles tray events in the event loop. Returns a [`tao::event_loop::ControlFlow`]
+/// to be used by the next iteration of the event loop.
+fn run_event_loop(
+    child_proc: &mut process::Child,
+    menu_channel: &MenuEventReceiver,
+) -> anyhow::Result<ControlFlow> {
+    if let Some(status) = child_proc.try_wait()? {
+        if !status.success() {
+            error!("Command exited with status: {status:#}");
+        } else {
+            info!("Command exited successfully: {status:#}");
+        }
+        return Ok(ControlFlow::Exit);
+    }
 
-    let CliArgs { cmd } = args;
-    // tray must be built AFTER event loop to prevent initializing low-level
-    // libraries out of order (mostly a macOS issue)
-    let mut tray = Some(build_tray(cmd.join(" "))?);
-    let menu_channel = MenuEvent::receiver();
+    if let Ok(event) = menu_channel.try_recv() {
+        debug!("{event:?}");
 
-    // TODO: log all output from the wrapped command
-    let mut child_proc = std::process::Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .spawn()
-        .context("Failed to spawn command")?;
+        let msg = TrayMessage::from_str(&event.id().0)?;
 
-    event_loop.run(move |_event, _window, control_flow| {
-        // TODO: extract this inner closure to a function for better error handling
-        *control_flow = tao::event_loop::ControlFlow::Poll;
-
-        // helper to exit the loop and clean up the tray icon in a reusable way
-        let mut exit_loop = || {
-            let _ = tray.take();
-            *control_flow = tao::event_loop::ControlFlow::Exit;
-        };
-
-        match child_proc.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    error!("Command exited with status: {status:#}");
-                } else {
-                    info!("Command exited successfully: {status:#}");
-                }
-                exit_loop();
+        match msg {
+            TrayMessage::Kill => {
+                child_proc.kill().context("Failed to kill child process")?;
+                return Ok(ControlFlow::Exit);
             }
-            Ok(None) => (),
-            Err(err) => {
-                error!("Error: {err:#}");
-                exit_loop();
-            }
-        };
-
-        if let Ok(event) = menu_channel.try_recv() {
-            debug!("{event:?}");
-
-            let msg =
-                TrayMessage::from_str(&event.id().0).expect("Somehow received an invalid event ID");
-
-            match msg {
-                TrayMessage::Kill => {
-                    if let Err(err) = child_proc.kill() {
-                        error!("Failed to kill child process: {err:#}");
-                    };
-                    exit_loop();
-                }
-                TrayMessage::ShowLogs => {
-                    let logs_dir = get_logs_dir().expect("Failed to get logs directory");
-                    open::that(logs_dir).expect("Failed to open logs directory");
-                }
+            TrayMessage::ShowLogs => {
+                let logs_dir = get_logs_dir()?;
+                open::that(logs_dir).context("Failed to open logs dir")?;
             }
         }
-    });
+    }
+
+    Ok(ControlFlow::Poll)
 }
 
 fn get_logs_dir() -> anyhow::Result<PathBuf> {
@@ -169,9 +140,33 @@ fn main() -> anyhow::Result<()> {
     init_logging()?;
     let args = CliArgs::parse();
     debug!("{args:#?}");
-    if let Err(err) = run_event_loop(args) {
-        // TODO: logging & notifications
-        error!("Error running event loop: {err:#}");
-    }
-    Ok(())
+    // TODO: notifications
+
+    // TODO: show notification that the app is running
+    let event_loop = EventLoopBuilder::new().build();
+
+    let CliArgs { cmd } = args;
+    // tray must be built AFTER event loop to prevent initializing low-level
+    // libraries out of order (mostly a macOS issue)
+    let mut tray = Some(build_tray(cmd.join(" "))?);
+    let menu_channel = MenuEvent::receiver();
+
+    // TODO: log all output from the wrapped command
+    let mut child_proc = process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .spawn()
+        .context("Failed to spawn command")?;
+
+    event_loop.run(move |_event, _window, control_flow| {
+        *control_flow = tao::event_loop::ControlFlow::Poll;
+
+        match run_event_loop(&mut child_proc, menu_channel) {
+            Ok(cf) => *control_flow = cf,
+            Err(err) => {
+                error!("Error: {err:#}");
+                *control_flow = ControlFlow::Exit;
+                let _ = tray.take();
+            }
+        };
+    })
 }
