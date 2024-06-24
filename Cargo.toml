@@ -9,6 +9,7 @@ clap = { version = "4.5.7", features = ["derive"] }
 dirs = "5.0.1"
 env_logger = "0.11.3"
 log = "0.4.21"
+notify-rust = "4.11.0"
 open = "5.1.4"
 strum = { version = "0.26.3", features = ["derive"] }
 tao = "0.28.1"

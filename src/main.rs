@@ -4,6 +4,7 @@ use anyhow::Context;
 use clap::{Parser, ValueHint};
 use env_logger::Target;
 use log::{debug, error, info};
+use notify_rust::Notification;
 use strum::VariantArray;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tray_icon::{
@@ -85,6 +86,7 @@ fn run_event_loop(
         } else {
             info!("Command exited successfully: {status:#}");
         }
+        show_notification("Process exited", &format!("Exit code: {status}"));
         return Ok(ControlFlow::Exit);
     }
 
@@ -106,6 +108,25 @@ fn run_event_loop(
     }
 
     Ok(ControlFlow::Poll)
+}
+
+/// Shows a notification with the given title and body. The app name and icon are set automatically
+/// by [`get_base_notification`].
+///
+/// # Arguments
+///
+/// * `title` - The title of the notification.
+/// * `body` - The body text of the notification.
+///
+/// # Panics
+///
+/// Panics if the notification fails to show, which should never happen.
+fn show_notification<S: AsRef<str>>(title: S, body: S) {
+    Notification::new()
+        .summary(title.as_ref())
+        .body(body.as_ref())
+        .show()
+        .unwrap_or_else(|e| unreachable!("Failed to show notification: {e:#?}"));
 }
 
 fn get_logs_dir() -> anyhow::Result<PathBuf> {
@@ -141,14 +162,14 @@ fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
     debug!("{args:#?}");
     // TODO: notifications
+    let CliArgs { cmd } = args;
+    let full_cmd_string = cmd.join(" ");
 
-    // TODO: show notification that the app is running
     let event_loop = EventLoopBuilder::new().build();
 
-    let CliArgs { cmd } = args;
     // tray must be built AFTER event loop to prevent initializing low-level
     // libraries out of order (mostly a macOS issue)
-    let mut tray = Some(build_tray(cmd.join(" "))?);
+    let mut tray = Some(build_tray(&full_cmd_string)?);
     let menu_channel = MenuEvent::receiver();
 
     // TODO: log all output from the wrapped command
@@ -157,15 +178,21 @@ fn main() -> anyhow::Result<()> {
         .spawn()
         .context("Failed to spawn command")?;
 
-    event_loop.run(move |_event, _window, control_flow| {
-        *control_flow = tao::event_loop::ControlFlow::Poll;
+    show_notification("Process started!", &full_cmd_string);
 
+    event_loop.run(move |_event, _window, control_flow| {
+        // tao doesn't exit immediately anymore, so this
+        // guard is here to prevent spamming notifications
+        // and logs.
+        if *control_flow == ControlFlow::Exit {
+            return;
+        }
         match run_event_loop(&mut child_proc, menu_channel) {
             Ok(cf) => *control_flow = cf,
             Err(err) => {
                 error!("Error: {err:#}");
-                *control_flow = ControlFlow::Exit;
                 let _ = tray.take();
+                *control_flow = ControlFlow::Exit;
             }
         };
     })
