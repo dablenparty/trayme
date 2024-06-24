@@ -1,4 +1,5 @@
 use anyhow::Context;
+use clap::{Parser, ValueHint};
 use strum::VariantArray;
 use tao::event_loop::EventLoopBuilder;
 use tray_icon::{
@@ -6,7 +7,19 @@ use tray_icon::{
     TrayIcon, TrayIconBuilder,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::VariantArray)]
+/// Runs any command-line command in the system tray. This is meant for long-running
+/// background processes that the user wants to keep running without having to keep a
+/// terminal window open, but it'll work with any command.
+#[derive(Debug, Parser)]
+#[command(trailing_var_arg = true, about, version, author)]
+struct CliArgs {
+    /// The command to run.
+    #[arg(required = true, value_hint = ValueHint::CommandWithArguments, num_args = 1..)]
+    cmd: String,
+    // TODO: customize tray icon via cli (e.g. tooltip, icon, etc.)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, VariantArray)]
 enum TrayMessage {
     Kill,
     ShowLogs,
@@ -58,6 +71,8 @@ fn run_event_loop() -> anyhow::Result<()> {
 }
 
 fn main() {
-    println!("Hello, world!");
+    let args = CliArgs::parse();
+    #[cfg(debug_assertions)]
+    println!("{args:#?}");
     run_event_loop().unwrap();
 }

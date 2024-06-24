@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.86"
+clap = { version = "4.5.7", features = ["derive"] }
 strum = { version = "0.26.3", features = ["derive"] }
 tao = "0.28.1"
 tray-icon = "0.14.3"
