@@ -1,7 +1,9 @@
-use std::str::FromStr;
+use std::{fs::OpenOptions, path::PathBuf, str::FromStr};
 
 use anyhow::Context;
 use clap::{Parser, ValueHint};
+use env_logger::Target;
+use log::{debug, error, info};
 use strum::VariantArray;
 use tao::event_loop::EventLoopBuilder;
 use tray_icon::{
@@ -88,51 +90,88 @@ fn run_event_loop(args: CliArgs) -> anyhow::Result<()> {
         .context("Failed to spawn command")?;
 
     event_loop.run(move |_event, _window, control_flow| {
+        // TODO: extract this inner closure to a function for better error handling
         *control_flow = tao::event_loop::ControlFlow::Poll;
+
+        // helper to exit the loop and clean up the tray icon in a reusable way
+        let mut exit_loop = || {
+            let _ = tray.take();
+            *control_flow = tao::event_loop::ControlFlow::Exit;
+        };
 
         match child_proc.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    eprintln!("Command exited with status: {status:#}");
+                    error!("Command exited with status: {status:#}");
                 } else {
-                    println!("Command exited successfully: {status:#}");
+                    info!("Command exited successfully: {status:#}");
                 }
-                let _ = tray.take();
-                *control_flow = tao::event_loop::ControlFlow::Exit;
+                exit_loop();
             }
             Ok(None) => (),
             Err(err) => {
-                eprintln!("Error: {err:#}");
-                let _ = tray.take();
-                *control_flow = tao::event_loop::ControlFlow::Exit;
+                error!("Error: {err:#}");
+                exit_loop();
             }
         };
 
         if let Ok(event) = menu_channel.try_recv() {
-            #[cfg(debug_assertions)]
-            println!("{event:?}");
+            debug!("{event:?}");
 
             let msg =
                 TrayMessage::from_str(&event.id().0).expect("Somehow received an invalid event ID");
 
             match msg {
                 TrayMessage::Kill => {
-                    child_proc.kill().expect("Failed to kill child process");
-                    let _ = tray.take();
-                    *control_flow = tao::event_loop::ControlFlow::Exit;
+                    if let Err(err) = child_proc.kill() {
+                        error!("Failed to kill child process: {err:#}");
+                    };
+                    exit_loop();
                 }
-                TrayMessage::ShowLogs => todo!("open and show logs"),
+                TrayMessage::ShowLogs => {
+                    let logs_dir = get_logs_dir().expect("Failed to get logs directory");
+                    open::that(logs_dir).expect("Failed to open logs directory");
+                }
             }
         }
     });
 }
 
-fn main() {
+fn get_logs_dir() -> anyhow::Result<PathBuf> {
+    let mut logs_dir = dirs::data_dir().context("Failed to get data directory")?;
+    logs_dir.push(env!("CARGO_PKG_NAME"));
+    std::fs::create_dir_all(&logs_dir).context("Failed to create logs directory")?;
+    Ok(logs_dir)
+}
+
+fn init_logging() -> anyhow::Result<()> {
+    let target = if cfg!(debug_assertions) {
+        Target::Stdout
+    } else {
+        let log_dir = get_logs_dir()?;
+        let log_file = log_dir.join("log.log");
+        let writer = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+            .context("Failed to open log file")?;
+        Target::Pipe(Box::new(writer))
+    };
+
+    env_logger::Builder::from_default_env()
+        .target(target)
+        .init();
+
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    init_logging()?;
     let args = CliArgs::parse();
-    #[cfg(debug_assertions)]
-    println!("{args:#?}");
+    debug!("{args:#?}");
     if let Err(err) = run_event_loop(args) {
         // TODO: logging & notifications
-        eprintln!("Error: {err:#}");
+        error!("Error running event loop: {err:#}");
     }
+    Ok(())
 }
