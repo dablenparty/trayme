@@ -1,5 +1,11 @@
 use tao::event_loop::EventLoopBuilder;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayMessage {
+    Kill,
+    ShowLogs,
+}
+
 fn run_event_loop() -> anyhow::Result<()> {
     // TODO: show notification that the app is running
     let event_loop = EventLoopBuilder::new().build();
