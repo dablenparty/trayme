@@ -135,19 +135,24 @@ fn spawn_process(cmd: &[String]) -> anyhow::Result<process::Child> {
         .create(true)
         .write(true)
         .truncate(true)
-        .open(output_file)
+        .open(&output_file)
         .context("Failed to open output file")?;
 
     let stderr_output = stdout_output
         .try_clone()
         .context("Failed to clone output file handle for stderr")?;
 
+    let args = &cmd[1..];
+    info!("Spawning command: {program} {args:?}");
+
     let child_proc = process::Command::new(program)
-        .args(&cmd[1..])
+        .args(args)
         .stdout(Stdio::from(stdout_output))
         .stderr(Stdio::from(stderr_output))
         .spawn()
         .context("Failed to spawn command")?;
+
+    debug!("output piped to: {output_file:?}");
 
     Ok(child_proc)
 }
@@ -164,9 +169,12 @@ fn spawn_process(cmd: &[String]) -> anyhow::Result<process::Child> {
 ///
 /// Panics if the notification fails to show, which should never happen.
 fn show_notification<S: AsRef<str>>(title: S, body: S) {
+    let title = title.as_ref();
+    let body = body.as_ref();
+    debug!("Showing notification: title: '{title}' body: '{body}'");
     Notification::new()
-        .summary(title.as_ref())
-        .body(body.as_ref())
+        .summary(title)
+        .body(body)
         .show()
         .unwrap_or_else(|e| unreachable!("Failed to show notification: {e:#?}"));
 }
@@ -201,8 +209,9 @@ fn init_logging() -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     init_logging()?;
+
     let args = CliArgs::parse();
-    info!("{args:#?}");
+    debug!("{args:#?}");
     let CliArgs { cmd } = args;
     let full_cmd_string = cmd.join(" ");
 
@@ -213,9 +222,7 @@ fn main() -> anyhow::Result<()> {
     let mut tray = Some(build_tray(&full_cmd_string)?);
     let menu_channel = MenuEvent::receiver();
 
-    // TODO: log all output from the wrapped command
     let mut child_proc = spawn_process(&cmd)?;
-
     show_notification("Process started!", &full_cmd_string);
 
     event_loop.run(move |_event, _window, control_flow| {
