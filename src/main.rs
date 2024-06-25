@@ -1,5 +1,5 @@
 #![warn(clippy::all, clippy::pedantic)]
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
 use std::{
     fs::OpenOptions,
@@ -148,6 +148,7 @@ fn spawn_process(cmd: &[String]) -> anyhow::Result<process::Child> {
     let args = &cmd[1..];
     info!("Spawning command: {program} {args:?}");
 
+    // TODO: on windows only: https://stackoverflow.com/questions/77089431/how-to-run-a-command-without-terminal-in-rust
     let child_proc = process::Command::new(program)
         .args(args)
         .stdout(Stdio::from(stdout_output))
