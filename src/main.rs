@@ -148,13 +148,30 @@ fn spawn_process(cmd: &[String]) -> anyhow::Result<process::Child> {
     let args = &cmd[1..];
     info!("Spawning command: {program} {args:?}");
 
-    // TODO: on windows only: https://stackoverflow.com/questions/77089431/how-to-run-a-command-without-terminal-in-rust
-    let child_proc = process::Command::new(program)
-        .args(args)
-        .stdout(Stdio::from(stdout_output))
-        .stderr(Stdio::from(stderr_output))
-        .spawn()
-        .context("Failed to spawn command")?;
+    #[cfg(not(windows))]
+    let child_proc = {
+        process::Command::new(program)
+            .args(args)
+            .stdout(Stdio::from(stdout_output))
+            .stderr(Stdio::from(stderr_output))
+            .spawn()
+            .context("Failed to spawn command")?
+    };
+    #[cfg(windows)]
+    let child_proc = {
+        use std::os::windows::process::CommandExt;
+        // https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags#flags
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        // https://stackoverflow.com/questions/77089431/how-to-run-a-command-without-terminal-in-rust
+        process::Command::new(program)
+            .args(args)
+            .stdout(Stdio::from(stdout_output))
+            .stderr(Stdio::from(stderr_output))
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .context("Failed to spawn command")?
+    };
 
     debug!("output piped to: {output_file:?}");
 
