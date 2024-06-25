@@ -1,4 +1,9 @@
-use std::{fs::OpenOptions, path::PathBuf, process, str::FromStr};
+use std::{
+    fs::OpenOptions,
+    path::PathBuf,
+    process::{self, Stdio},
+    str::FromStr,
+};
 
 use anyhow::Context;
 use clap::{Parser, ValueHint};
@@ -110,6 +115,43 @@ fn run_event_loop(
     Ok(ControlFlow::Poll)
 }
 
+/// Spawns the given command in a new process, redirecting stdout and stderr to log files in the
+/// logs directory. Returns the child process handle.
+///
+/// # Arguments
+///
+/// * `cmd` - The command (with args) to run, split into a vector of strings.
+///
+/// # Errors
+///
+/// If the log file cannot be created, written, or cloned (for stderr), or if the command fails to
+/// spawn, an error is returned.
+fn spawn_process(cmd: &[String]) -> anyhow::Result<process::Child> {
+    let now_fmt = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let program = &cmd[0];
+    let output_file = get_logs_dir()?.join(format!("{program}_{now_fmt}.log"));
+    // TODO: examine if "append" is better than "truncate"
+    let stdout_output = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(output_file)
+        .context("Failed to open output file")?;
+
+    let stderr_output = stdout_output
+        .try_clone()
+        .context("Failed to clone output file handle for stderr")?;
+
+    let child_proc = process::Command::new(program)
+        .args(&cmd[1..])
+        .stdout(Stdio::from(stdout_output))
+        .stderr(Stdio::from(stderr_output))
+        .spawn()
+        .context("Failed to spawn command")?;
+
+    Ok(child_proc)
+}
+
 /// Shows a notification with the given title and body. The app name and icon are set automatically
 /// by [`get_base_notification`].
 ///
@@ -160,8 +202,7 @@ fn init_logging() -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     init_logging()?;
     let args = CliArgs::parse();
-    debug!("{args:#?}");
-    // TODO: notifications
+    info!("{args:#?}");
     let CliArgs { cmd } = args;
     let full_cmd_string = cmd.join(" ");
 
@@ -173,10 +214,7 @@ fn main() -> anyhow::Result<()> {
     let menu_channel = MenuEvent::receiver();
 
     // TODO: log all output from the wrapped command
-    let mut child_proc = process::Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .spawn()
-        .context("Failed to spawn command")?;
+    let mut child_proc = spawn_process(&cmd)?;
 
     show_notification("Process started!", &full_cmd_string);
 
