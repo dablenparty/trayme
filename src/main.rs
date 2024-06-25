@@ -1,3 +1,5 @@
+#![warn(clippy::all, clippy::pedantic)]
+
 use std::{
     fs::OpenOptions,
     path::PathBuf,
@@ -86,10 +88,10 @@ fn run_event_loop(
     menu_channel: &MenuEventReceiver,
 ) -> anyhow::Result<ControlFlow> {
     if let Some(status) = child_proc.try_wait()? {
-        if !status.success() {
-            error!("Command exited with status: {status:#}");
-        } else {
+        if status.success() {
             info!("Command exited successfully: {status:#}");
+        } else {
+            error!("Command exited with status: {status:?}");
         }
         show_notification("Process exited", &format!("Exit code: {status}"));
         return Ok(ControlFlow::Exit);
